@@ -452,8 +452,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-[11px]">
             <div className="flex items-start gap-1.5">
-              <Clock className="w-3.5 h-3.5 text-blue-600 shrink-0 mt-0.5" />
-              <span><strong>60 Menit Ujian:</strong> Bebas mengerjakan dan berpindah soal sampai butir terakhir.</span>
+              <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+              <span><strong>2 Menit per Soal:</strong> Setiap soal wajib dikerjakan 2 menit sebelum tombol berikutnya terbuka.</span>
             </div>
             <div className="flex items-start gap-1.5">
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
@@ -555,8 +555,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <span className="font-semibold text-slate-800">{selectedStudent.ruang} &bull; {selectedStudent.sesi}</span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-slate-200">
-                  <span className="text-slate-500">Durasi Ujian:</span>
-                  <span className="font-bold text-blue-700">60 Menit (Bebas Navigasi sampai Soal Terakhir)</span>
+                  <span className="text-slate-500">Waktu per Butir:</span>
+                  <span className="font-bold text-amber-700">2 Menit Penuh (Terkunci sebelum 2 menit habis)</span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-slate-200">
                   <span className="text-slate-500">KKM Ketuntasan ({selectedStudent.kelas}):</span>

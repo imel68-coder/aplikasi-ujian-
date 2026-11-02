@@ -24,7 +24,9 @@ import {
   AlertTriangle,
   Sparkles,
   ArrowRight,
-  RotateCcw
+  RotateCcw,
+  Lock,
+  Unlock
 } from 'lucide-react';
 import { Question, Student, UserAnswer, ExamResult, getKkmForClass, isStudentPassed } from '../types/cbt';
 import { MOCK_EXAM_INFO } from '../data/mockQuestions';
@@ -50,8 +52,23 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
   // User answers map: questionId -> UserAnswer
   const [answers, setAnswers] = useState<Record<number, UserAnswer>>({});
 
-  // Total countdown timer in seconds (60 minutes default or passed prop, ample time for students)
-  const examDurationSeconds = Math.max((durationMinutes || 60) * 60, questions.length * 180);
+  // 2 MENIT (120 DETIK) PER BUTIR SOAL
+  const QUESTION_TIME_LIMIT = 120; // 2 menit = 120 detik per butir soal
+
+  // Map questionId -> remaining seconds for that question (starts at 120s)
+  const [questionTimers, setQuestionTimers] = useState<Record<number, number>>(() => {
+    const initial: Record<number, number> = {};
+    questions.forEach((q) => {
+      initial[q.id] = QUESTION_TIME_LIMIT;
+    });
+    return initial;
+  });
+
+  // Track max question index reached / unlocked (starts at 0)
+  const [unlockedUpToIndex, setUnlockedUpToIndex] = useState<number>(0);
+
+  // Total countdown timer in seconds (60 menit penuh atau prop, tidak boleh mengakhiri ujian prematur)
+  const examDurationSeconds = Math.max((durationMinutes || 60) * 60, (questions.length + 5) * QUESTION_TIME_LIMIT);
   const [totalSecondsRemaining, setTotalSecondsRemaining] = useState(examDurationSeconds);
   const [secondsElapsed, setSecondsElapsed] = useState(0);
 
@@ -61,7 +78,7 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
   // Question list drawer toggle (mobile / popup)
   const [showQuestionPalette, setShowQuestionPalette] = useState(false);
 
-  // Finish exam confirmation dialog (only confirmed by user on last question or intentional submit)
+  // Finish exam confirmation dialog (only confirmed on last question or intentional submit)
   const [showFinishConfirm, setShowFinishConfirm] = useState(false);
   const [confirmAgreed, setConfirmAgreed] = useState(false);
 
@@ -70,6 +87,9 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
 
   // Fullscreen state
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Notification popup when 2 minutes on active question finishes
+  const [showUnlockNotice, setShowUnlockNotice] = useState(false);
 
   // Time-up modal state (if the full 60 minutes expire)
   const [isTimeUp, setIsTimeUp] = useState(false);
@@ -86,9 +106,36 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
     isDoubtful: false
   };
 
-  // Timer countdown effect: decrements total remaining seconds every second
+  // Remaining seconds for active question
+  const currentQSeconds = questionTimers[currentQ?.id] ?? QUESTION_TIME_LIMIT;
+  const isCurrentQExpired = currentQSeconds <= 0;
+
+  // 1. Timer countdown effect for active question & overall total timer
   useEffect(() => {
+    if (!currentQ) return;
+
     const timer = setInterval(() => {
+      // 1. Count down current active question timer if still > 0
+      setQuestionTimers((prev) => {
+        const currentSec = prev[currentQ.id] ?? QUESTION_TIME_LIMIT;
+        if (currentSec <= 1) {
+          if (currentSec === 1) {
+            setShowUnlockNotice(true);
+            // Unlock next question index
+            setUnlockedUpToIndex((curr) => Math.max(curr, currentIndex + 1));
+          }
+          return {
+            ...prev,
+            [currentQ.id]: 0
+          };
+        }
+        return {
+          ...prev,
+          [currentQ.id]: currentSec - 1
+        };
+      });
+
+      // 2. Count down overall exam timer
       setSecondsElapsed((prev) => prev + 1);
       setTotalSecondsRemaining((prev) => {
         if (prev <= 1) {
@@ -101,7 +148,14 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
     }, 1000);
 
     return () => clearInterval(timer);
-  }, []);
+  }, [currentQ?.id, currentIndex]);
+
+  // Format seconds to MM:SS
+  const formatMinutesSeconds = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
 
   // Format seconds to HH:MM:SS
   const formatTime = (totalSec: number) => {
@@ -389,7 +443,7 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
             </div>
           </div>
 
-          {/* Center & Right Controls: Font Zoom, Fullscreen, Timer, Profile */}
+          {/* Center & Right Controls: Font Zoom, Countdown 2 Menit, Timer Total, Profile */}
           <div className="flex items-center gap-2 sm:gap-4">
             
             {/* Font Zoom Controls (A- / A / A+) */}
@@ -431,20 +485,43 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
               {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
             </button>
 
-            {/* SISA WAKTU UJIAN */}
+            {/* COUNTDOWN WAKTU 2 MENIT SOAL AKTIF */}
             <div className={`flex items-center gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl border-2 shadow-inner transition ${
-              totalSecondsRemaining < 300 
-                ? 'bg-rose-950/95 border-rose-500 text-rose-200 animate-pulse' 
+              isCurrentQExpired
+                ? 'bg-emerald-950/90 border-emerald-400 text-emerald-300 ring-2 ring-emerald-500/40'
+                : currentQSeconds < 30
+                ? 'bg-rose-950/95 border-rose-500 text-rose-200 animate-pulse'
                 : 'bg-slate-900/90 border-amber-400 text-amber-300'
             }`}>
-              <Clock className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400 shrink-0" />
+              <div className="p-1 rounded-lg bg-black/40 shrink-0">
+                {isCurrentQExpired ? (
+                  <Unlock className="w-4 h-4 text-emerald-400" />
+                ) : (
+                  <Lock className="w-4 h-4 text-amber-400" />
+                )}
+              </div>
               <div>
-                <div className="text-[9px] uppercase tracking-wider font-extrabold text-slate-300 leading-none">
-                  SISA WAKTU UJIAN
+                <div className="flex items-center gap-1.5 text-[9px] uppercase tracking-wider font-extrabold text-slate-300 leading-none">
+                  <span>WAKTU SOAL NO. {currentIndex + 1}</span>
+                  <span className={`px-1.5 py-0.2 rounded text-[8px] font-bold ${
+                    isCurrentQExpired ? 'bg-emerald-500 text-white' : 'bg-amber-400/30 text-amber-200'
+                  }`}>
+                    {isCurrentQExpired ? 'TERBUKA' : 'TERKUNCI'}
+                  </span>
                 </div>
-                <div className="text-sm sm:text-base font-mono font-black tracking-widest leading-tight">
-                  {formatTime(totalSecondsRemaining)}
+                <div className="text-sm sm:text-base font-mono font-black tracking-widest leading-tight flex items-baseline gap-1">
+                  <span>{formatMinutesSeconds(currentQSeconds)}</span>
+                  <span className="text-[10px] text-slate-400 font-normal">/ 02:00</span>
                 </div>
+              </div>
+            </div>
+
+            {/* TOTAL SISA WAKTU UJIAN */}
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl border border-blue-700/70 bg-blue-950/60 text-slate-200 text-xs">
+              <Clock className="w-3.5 h-3.5 text-blue-300" />
+              <div>
+                <div className="text-[9px] text-slate-400 uppercase font-semibold leading-none">Total Ujian</div>
+                <div className="font-mono font-bold text-xs text-blue-200">{formatTime(totalSecondsRemaining)}</div>
               </div>
             </div>
 
@@ -505,7 +582,7 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
               </span>
             </div>
 
-            {/* TOMBOL DAFTAR SOAL (Khas CBT ANBK/UTBK) */}
+            {/* TOMBOL DAFTAR SOAL */}
             <button
               type="button"
               onClick={() => setShowQuestionPalette(!showQuestionPalette)}
@@ -759,35 +836,62 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
                 </div>
               </div>
 
-              {/* Status Info Pengerjaan Soal */}
-              <div className="mt-8 pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold">Status Soal:</span>
-                  {isQuestionAnswered(currentQ) ? (
-                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold flex items-center gap-1 border border-emerald-300">
-                      <Check className="w-3 h-3 text-emerald-600" />
-                      Sudah Dijawab
-                    </span>
-                  ) : (
-                    <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 font-semibold border border-slate-300">
-                      Belum Dijawab
-                    </span>
-                  )}
-                  {currentAnswer.isDoubtful && (
-                    <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 font-bold border border-amber-300">
-                      Ditandai Ragu-Ragu
-                    </span>
-                  )}
+              {/* STATUS KUNCI WAKTU PENGERJAAN SOAL (2 MENIT) */}
+              <div className={`mt-6 p-4 rounded-xl border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs ${
+                isCurrentQExpired
+                  ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                  : 'bg-amber-50 border-amber-300 text-amber-900'
+              }`}>
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-lg shrink-0 ${
+                    isCurrentQExpired ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700 animate-pulse'
+                  }`}>
+                    {isCurrentQExpired ? (
+                      <Unlock className="w-5 h-5" />
+                    ) : (
+                      <Lock className="w-5 h-5" />
+                    )}
+                  </div>
+                  <div>
+                    {isCurrentQExpired ? (
+                      <div>
+                        <div className="font-extrabold text-emerald-800 text-sm flex items-center gap-1.5">
+                          <span>WAKTU 2 MENIT SOAL INI SELESAI</span>
+                          <span className="text-[10px] bg-emerald-200 text-emerald-900 px-1.5 py-0.2 rounded font-bold">TERBUKA</span>
+                        </div>
+                        <p className="text-xs text-emerald-700 mt-0.5">
+                          {isLastQuestion
+                            ? 'Waktu 2 menit telah selesai. Anda sekarang dapat menekan tombol "SELESAI UJIAN" untuk mengumpulkan.'
+                            : 'Waktu 2 menit telah selesai. Anda sekarang dapat menekan tombol "SOAL BERIKUTNYA »" untuk melanjutkan.'}
+                        </p>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="font-extrabold text-amber-900 text-sm flex items-center gap-1.5">
+                          <span>SOAL BERIKUTNYA MASIH TERKUNCI</span>
+                          <span className="text-[10px] bg-amber-200 text-amber-950 px-1.5 py-0.2 rounded font-mono font-bold">
+                            Sisa Waktu: {formatMinutesSeconds(currentQSeconds)}
+                          </span>
+                        </div>
+                        <p className="text-xs text-amber-800 mt-0.5">
+                          Setiap butir soal wajib dikerjakan selama <strong>2 menit penuh</strong>. Tombol berikutnya akan terbuka setelah waktu habis.
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="text-slate-500 font-medium">
-                  Nomor {currentIndex + 1} dari {totalCount} butir soal
+
+                <div className="text-right shrink-0">
+                  <span className="text-[11px] font-semibold text-slate-500 block">
+                    Soal No. {currentIndex + 1} dari {totalCount}
+                  </span>
                 </div>
               </div>
 
               {/* 4. FOOTER BAR NAVIGASI CBT (SEBELUMNYA - RAGU-RAGU - BERIKUTNYA / SELESAI UJIAN) */}
-              <div className="pt-5 mt-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+              <div className="pt-5 mt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
                 
-                {/* Tombol Soal Sebelumnya */}
+                {/* Tombol Soal Sebelumnya (Hanya bisa kembali jika bukan nomor pertama) */}
                 <button
                   type="button"
                   disabled={isFirstQuestion}
@@ -821,29 +925,63 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
                   <span>RAGU - RAGU</span>
                 </button>
 
-                {/* TOMBOL SOAL BERIKUTNYA ATAU SELESAI UJIAN (DI SOAL TERAKHIR) */}
+                {/* TOMBOL SOAL BERIKUTNYA ATAU SELESAI UJIAN (TERKUNCI HINGGA WAKTU 2 MENIT HABIS) */}
                 {isLastQuestion ? (
-                  // PAS SOAL TERAKHIR: Tombol Berwarna Hijau "SELESAI UJIAN" yang membuka dialog konfirmasi
+                  // PAS SOAL TERAKHIR: Tombol "SELESAI UJIAN" (Terkunci sebelum 2 menit, lalu membuka dialog konfirmasi)
                   <button
                     type="button"
+                    disabled={!isCurrentQExpired}
                     onClick={() => {
-                      setConfirmAgreed(false);
-                      setShowFinishConfirm(true);
+                      if (isCurrentQExpired) {
+                        setConfirmAgreed(false);
+                        setShowFinishConfirm(true);
+                      }
                     }}
-                    className="py-3 px-6 rounded-xl font-black text-xs sm:text-sm bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 text-white border border-emerald-500 shadow-lg shadow-emerald-700/30 flex items-center gap-2 cursor-pointer transition active:scale-95 ring-2 ring-emerald-400/50"
+                    className={`py-3 px-6 rounded-xl font-black text-xs sm:text-sm border shadow-md flex items-center gap-2 transition ${
+                      isCurrentQExpired
+                        ? 'bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white border-emerald-600 cursor-pointer active:scale-95 ring-2 ring-emerald-400/40'
+                        : 'bg-slate-200 text-slate-400 border-slate-300 cursor-not-allowed opacity-80'
+                    }`}
                   >
-                    <CheckCircle className="w-4 h-4 text-amber-300" />
-                    <span>SELESAI UJIAN</span>
+                    {!isCurrentQExpired ? (
+                      <>
+                        <Lock className="w-4 h-4 text-slate-400" />
+                        <span>SELESAI UJIAN (Terkunci: {formatMinutesSeconds(currentQSeconds)})</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle className="w-4 h-4 text-amber-300" />
+                        <span>SELESAI UJIAN</span>
+                      </>
+                    )}
                   </button>
                 ) : (
-                  // BUKAN SOAL TERAKHIR: Tombol Lanjut ke Soal Berikutnya (Bebas diklik kapan saja)
+                  // BUKAN SOAL TERAKHIR: Tombol "SOAL BERIKUTNYA" (Terkunci sebelum 2 menit habis)
                   <button
                     type="button"
-                    onClick={() => setCurrentIndex((prev) => Math.min(totalCount - 1, prev + 1))}
-                    className="py-3 px-5 rounded-xl font-bold text-xs sm:text-sm bg-gradient-to-r from-blue-700 to-indigo-800 hover:from-blue-800 hover:to-indigo-900 text-white border border-blue-600 shadow-sm flex items-center gap-2 cursor-pointer transition active:scale-95"
+                    disabled={!isCurrentQExpired}
+                    onClick={() => {
+                      if (isCurrentQExpired) {
+                        setCurrentIndex((prev) => Math.min(totalCount - 1, prev + 1));
+                      }
+                    }}
+                    className={`py-3 px-5 rounded-xl font-bold text-xs sm:text-sm border shadow-sm flex items-center gap-2 transition ${
+                      isCurrentQExpired
+                        ? 'bg-gradient-to-r from-emerald-600 to-indigo-700 hover:from-emerald-700 hover:to-indigo-800 text-white border-emerald-600 shadow-md ring-2 ring-emerald-400/40 cursor-pointer active:scale-95'
+                        : 'bg-slate-200 text-slate-400 border-slate-300 cursor-not-allowed opacity-80'
+                    }`}
                   >
-                    <span>SOAL BERIKUTNYA</span>
-                    <ChevronRight className="w-4 h-4" />
+                    {!isCurrentQExpired ? (
+                      <>
+                        <Lock className="w-4 h-4 text-slate-400" />
+                        <span>SOAL BERIKUTNYA (Terkunci: {formatMinutesSeconds(currentQSeconds)})</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>SOAL BERIKUTNYA</span>
+                        <ChevronRight className="w-4 h-4" />
+                      </>
+                    )}
                   </button>
                 )}
 
@@ -880,20 +1018,21 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
                   <span>Belum dijawab</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded bg-blue-100 border border-blue-600 text-[8px] font-black text-blue-900 flex items-center justify-center">
-                    ★
+                  <span className="w-3 h-3 rounded bg-slate-200 border border-slate-300 flex items-center justify-center text-[8px] text-slate-500">
+                    <Lock className="w-2 h-2" />
                   </span>
-                  <span>Soal Terakhir</span>
+                  <span>Terkunci (2 mnt)</span>
                 </div>
               </div>
 
-              {/* Grid 1 to N: Siswa bebas klik nomor berapa saja untuk berpindah soal */}
+              {/* Grid 1 to N: Nomor yang belum terbuka terkunci sampai waktu 2 menit soal sebelumnya selesai */}
               <div className="grid grid-cols-5 gap-2 max-h-[380px] overflow-y-auto p-1">
                 {questions.map((q, idx) => {
                   const ans = answers[q.id];
                   const answered = isQuestionAnswered(q);
                   const doubtful = ans?.isDoubtful;
                   const isActive = idx === currentIndex;
+                  const isLocked = idx > unlockedUpToIndex;
                   const isItemLast = idx === totalCount - 1;
 
                   let bgClass = 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100';
@@ -916,21 +1055,28 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
                     <button
                       type="button"
                       key={q.id}
-                      onClick={() => setCurrentIndex(idx)}
-                      title={`Pindah ke Soal No. ${idx + 1}${isItemLast ? ' (Soal Terakhir)' : ''}`}
-                      className={`relative h-11 rounded-lg border-2 text-xs font-bold transition flex flex-col items-center justify-center cursor-pointer ${bgClass} ${
-                        isActive ? 'ring-2 ring-blue-600 ring-offset-2 scale-105 z-10' : ''
-                      }`}
+                      disabled={isLocked}
+                      onClick={() => !isLocked && setCurrentIndex(idx)}
+                      title={isLocked ? `Soal no. ${idx + 1} terkunci sampai waktu 2 menit soal sebelumnya selesai` : `Pindah ke Soal No. ${idx + 1}`}
+                      className={`relative h-11 rounded-lg border-2 text-xs font-bold transition flex flex-col items-center justify-center ${
+                        isLocked
+                          ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
+                          : `${bgClass} cursor-pointer`
+                      } ${isActive ? 'ring-2 ring-blue-600 ring-offset-2 scale-105 z-10' : ''}`}
                     >
                       <span className="leading-none text-[11px]">{idx + 1}</span>
-                      {selectedLetter && (
-                        <span className={`text-[9px] font-black leading-none mt-0.5 ${
-                          doubtful ? 'text-amber-950' : answered ? 'text-white' : 'text-blue-800'
-                        }`}>
-                          {selectedLetter}
-                        </span>
+                      {isLocked ? (
+                        <Lock className="w-3 h-3 text-slate-400 mt-0.5" />
+                      ) : (
+                        selectedLetter && (
+                          <span className={`text-[9px] font-black leading-none mt-0.5 ${
+                            doubtful ? 'text-amber-950' : answered ? 'text-white' : 'text-blue-800'
+                          }`}>
+                            {selectedLetter}
+                          </span>
+                        )
                       )}
-                      {isItemLast && (
+                      {isItemLast && !isLocked && (
                         <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-amber-400 rounded-full border border-white" title="Soal Terakhir" />
                       )}
                     </button>
@@ -938,9 +1084,9 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
                 })}
               </div>
 
-              {/* Selesai Button in Sidebar */}
+              {/* Selesai Button in Sidebar (Hanya bisa mengakhiri saat soal terakhir telah terbuka dan selesai) */}
               <div className="pt-4 mt-4 border-t border-slate-200">
-                {isLastQuestion ? (
+                {isLastQuestion && isCurrentQExpired ? (
                   <button
                     type="button"
                     onClick={() => {
@@ -953,14 +1099,15 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
                     <span>Selesai & Kumpulkan Ujian</span>
                   </button>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => setShowEarlyFinishNotice(true)}
-                    className="w-full py-2.5 px-3 rounded-xl bg-slate-700 hover:bg-slate-800 text-white font-bold text-xs shadow transition flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <ArrowRight className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Ke Soal Terakhir & Selesai</span>
-                  </button>
+                  <div className="text-center p-2 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-500 font-medium">
+                    {isLastQuestion ? (
+                      <span className="text-amber-700 font-bold">
+                        Waktu soal terakhir: {formatMinutesSeconds(currentQSeconds)}
+                      </span>
+                    ) : (
+                      <span>Kerjakan setiap butir soal 2 menit hingga soal terakhir</span>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -1004,8 +1151,10 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
                   <span>Belum ({unansweredCount})</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="w-3.5 h-3.5 rounded bg-blue-100 border border-blue-600 text-[8px] font-black text-blue-900 flex items-center justify-center">★</span>
-                  <span>Soal Terakhir (No. {totalCount})</span>
+                  <span className="w-3.5 h-3.5 rounded bg-slate-200 border border-slate-300 flex items-center justify-center text-[9px] text-slate-500">
+                    <Lock className="w-2.5 h-2.5" />
+                  </span>
+                  <span>Terkunci (2 mnt)</span>
                 </div>
               </div>
 
@@ -1016,6 +1165,7 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
                   const answered = isQuestionAnswered(q);
                   const doubtful = ans?.isDoubtful;
                   const isActive = idx === currentIndex;
+                  const isLocked = idx > unlockedUpToIndex;
 
                   let bgClass = 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100';
                   if (doubtful) {
@@ -1037,93 +1187,42 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
                     <button
                       type="button"
                       key={q.id}
+                      disabled={isLocked}
                       onClick={() => {
-                        setCurrentIndex(idx);
-                        setShowQuestionPalette(false);
+                        if (!isLocked) {
+                          setCurrentIndex(idx);
+                          setShowQuestionPalette(false);
+                        }
                       }}
-                      title={`Pindah ke Soal No. ${idx + 1}`}
-                      className={`h-12 rounded-xl border-2 text-xs font-bold flex flex-col items-center justify-center transition cursor-pointer ${bgClass} ${
-                        isActive ? 'ring-2 ring-blue-600 ring-offset-2 scale-105' : ''
-                      }`}
+                      title={isLocked ? `Soal no. ${idx + 1} terkunci sampai waktu 2 menit soal sebelumnya selesai` : `Pindah ke Soal No. ${idx + 1}`}
+                      className={`h-12 rounded-xl border-2 text-xs font-bold flex flex-col items-center justify-center transition ${
+                        isLocked
+                          ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
+                          : `${bgClass} cursor-pointer`
+                      } ${isActive ? 'ring-2 ring-blue-600 ring-offset-2 scale-105' : ''}`}
                     >
                       <span className="text-xs">{idx + 1}</span>
-                      {selectedLetter && (
-                        <span className={`text-[10px] font-black ${doubtful ? 'text-amber-950' : 'text-white'}`}>
-                          {selectedLetter}
-                        </span>
+                      {isLocked ? (
+                        <Lock className="w-3.5 h-3.5 text-slate-400 mt-0.5" />
+                      ) : (
+                        selectedLetter && (
+                          <span className={`text-[10px] font-black ${doubtful ? 'text-amber-950' : 'text-white'}`}>
+                            {selectedLetter}
+                          </span>
+                        )
                       )}
                     </button>
                   );
                 })}
               </div>
 
-              <div className="pt-4 mt-4 border-t border-slate-200 flex items-center gap-2">
+              <div className="pt-4 mt-4 border-t border-slate-200 flex items-center justify-end">
                 <button
                   type="button"
                   onClick={() => setShowQuestionPalette(false)}
-                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer"
+                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer"
                 >
-                  Tutup
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCurrentIndex(totalCount - 1);
-                    setShowQuestionPalette(false);
-                  }}
-                  className="py-2.5 px-3 bg-blue-900 hover:bg-blue-800 text-white font-bold text-xs rounded-xl transition cursor-pointer"
-                >
-                  Ke Soal Terakhir (No. {totalCount})
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL PERINGATAN JIKA INGIN SELESAI SEBELUM MENCAPAI SOAL TERAKHIR */}
-      {showEarlyFinishNotice && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-gradient-to-r from-amber-600 to-amber-700 px-6 py-4 text-white flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="w-5 h-5 text-amber-200" />
-                <h3 className="font-bold text-base">Belum di Soal Terakhir</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowEarlyFinishNotice(false)}
-                className="text-white/80 hover:text-white font-bold p-1 cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4">
-              <p className="text-xs sm:text-sm text-slate-700 leading-relaxed font-medium">
-                Anda saat ini masih berada di <strong>Soal No. {currentIndex + 1}</strong> dari total <strong>{totalCount} butir soal</strong>.
-              </p>
-              <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs">
-                Sesuai arahan, silakan lanjutkan pengerjaan hingga butir soal terakhir (No. {totalCount}) untuk memastikan semua pertanyaan telah terjawab dengan baik.
-              </div>
-
-              <div className="flex flex-col sm:flex-row items-center gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowEarlyFinishNotice(false);
-                    setCurrentIndex(totalCount - 1);
-                  }}
-                  className="w-full sm:flex-1 py-2.5 px-4 rounded-xl bg-blue-900 hover:bg-blue-800 text-white font-bold text-xs transition cursor-pointer"
-                >
-                  Menuju Soal Terakhir (No. {totalCount})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowEarlyFinishNotice(false)}
-                  className="w-full sm:w-auto py-2.5 px-4 rounded-xl border border-slate-300 text-slate-700 font-bold text-xs hover:bg-slate-100 transition cursor-pointer"
-                >
-                  Lanjut Mengerjakan
+                  Tutup Daftar Soal
                 </button>
               </div>
             </div>
@@ -1140,7 +1239,7 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
                 <CheckCircle className="w-5 h-5 text-amber-300" />
                 <div>
                   <h3 className="font-bold text-base leading-tight">Konfirmasi Selesai & Kirim Ujian</h3>
-                  <div className="text-[11px] text-emerald-200 font-medium">Butir Soal Terakhir (No. {totalCount}) Tercapai</div>
+                  <div className="text-[11px] text-emerald-200 font-medium">Butir Soal Terakhir (No. {totalCount}) Telah Selesai</div>
                 </div>
               </div>
               <button
@@ -1165,7 +1264,7 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
               </div>
 
               <p className="text-xs sm:text-sm text-slate-700 leading-relaxed font-medium">
-                Anda telah menyelesaikan pengerjaan butir soal hingga nomor terakhir. Berikut adalah rekapitulasi jawaban Anda:
+                Anda telah mengerjakan seluruh butir soal hingga nomor terakhir. Berikut adalah rekapitulasi jawaban Anda:
               </p>
 
               {/* Rincian Jawaban */}
@@ -1201,7 +1300,7 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
                     {unansweredCount > 0 && doubtfulCount > 0 && ' dan '}
                     {doubtfulCount > 0 && <span className="font-bold underline">{doubtfulCount} butir soal dengan status ragu-ragu</span>}.
                     <p className="mt-1 text-slate-700">
-                      Anda dapat menekan tombol <strong>"Periksa Kembali Jawaban"</strong> untuk melengkapi atau merevisi soal sebelum mengirim.
+                      Anda dapat memilih <strong>"Periksa Kembali Jawaban"</strong> sebelum mengirimkan ujian.
                     </p>
                   </div>
                 </div>
@@ -1216,7 +1315,7 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
                   className="w-5 h-5 mt-0.5 text-blue-600 rounded focus:ring-blue-500 cursor-pointer shrink-0"
                 />
                 <span className="text-xs text-slate-800 font-bold leading-relaxed">
-                  Saya telah memeriksa seluruh jawaban hingga butir soal terakhir (No. {totalCount}), dan menyatakan secara sadar untuk mengakhiri serta mengirimkan lembar ujian ini.
+                  Saya telah selesai mengerjakan seluruh soal sampai nomor terakhir (No. {totalCount}), telah memeriksa jawaban, dan menyatakan konfirmasi untuk mengakhiri dan mengirimkan ujian.
                 </span>
               </label>
 
@@ -1248,18 +1347,48 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
         </div>
       )}
 
-      {/* MODAL WAKTU UJIAN TELAH HABIS (JIKA DURASI PENUH 60 MENIT TELAH SELESAI) */}
+      {/* TOAST NOTIFIKASI WAKTU 2 MENIT SOAL INI SELESAI */}
+      {showUnlockNotice && (
+        <div className="fixed bottom-6 right-6 z-50 max-w-sm bg-gradient-to-r from-emerald-800 to-teal-900 text-white p-4 rounded-2xl shadow-2xl border-2 border-emerald-400 animate-in slide-in-from-bottom duration-300 flex items-start gap-3">
+          <div className="p-2 rounded-xl bg-white/20 shrink-0">
+            <Unlock className="w-5 h-5 text-amber-300" />
+          </div>
+          <div className="flex-1">
+            <h4 className="font-extrabold text-sm text-amber-300">Waktu 2 Menit Selesai!</h4>
+            <p className="text-xs text-emerald-100 mt-0.5 leading-relaxed">
+              Waktu pengerjaan butir soal no. {currentIndex + 1} telah selesai. Tombol{' '}
+              <strong>"{isLastQuestion ? 'SELESAI UJIAN' : 'SOAL BERIKUTNYA'}"</strong> sekarang sudah terbuka!
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowUnlockNotice(false)}
+              className="mt-2.5 px-3 py-1 bg-white text-emerald-950 rounded-lg text-xs font-bold shadow hover:bg-emerald-50 transition cursor-pointer"
+            >
+              Mengerti, Lanjutkan
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowUnlockNotice(false)}
+            className="text-white/70 hover:text-white p-0.5 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* MODAL WAKTU TOTAL UJIAN HABIS (JIKA DURASI PENUH TELAH SELESAI) */}
       {isTimeUp && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-xs p-4">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-300 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-200">
             <div className="bg-gradient-to-r from-red-700 to-rose-800 px-6 py-4 text-white flex items-center gap-2.5">
               <Clock className="w-5 h-5 text-amber-300" />
-              <h3 className="font-bold text-base">Waktu Ujian Telah Habis</h3>
+              <h3 className="font-bold text-base">Alokasi Waktu Ujian Telah Selesai</h3>
             </div>
 
             <div className="p-6 space-y-4">
               <p className="text-xs sm:text-sm text-slate-700 leading-relaxed font-medium">
-                Alokasi waktu ujian resmi telah selesai. Seluruh jawaban yang telah Anda pilih telah tersimpan dengan aman di sistem.
+                Alokasi waktu ujian resmi telah selesai. Seluruh jawaban yang telah Anda pilih telah tersimpan dengan aman di database.
               </p>
 
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-1">
@@ -1279,7 +1408,7 @@ export const TkaExamView: React.FC<TkaExamViewProps> = ({
                 className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md flex items-center justify-center gap-2 cursor-pointer transition active:scale-95"
               >
                 <Send className="w-4 h-4" />
-                <span>Kirim Jawaban & Lihat Hasil</span>
+                <span>Kirim Jawaban Sekarang</span>
               </button>
             </div>
           </div>
